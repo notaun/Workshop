@@ -1,0 +1,171 @@
+import pandas as pd
+import os
+import time
+from tabulate import tabulate
+from colorama import Fore, Style, init
+from fuzzywuzzy import process
+
+# Initialize Colorama for proper ANSI handling
+init(autoreset=True)
+
+class DataClassifierV3:
+    def __init__(self):
+        self.categories = {
+            "1": "🍎 Fruits",
+            "2": "🌿 Plants",
+            "3": "🥕 Vegetables"
+        }
+        self.xlsx_files = {
+            "🍎 Fruits": "indoor_fruits_dataset.xlsx",
+            "🌿 Plants": [
+                "plant_main classification_complete (3).xlsx",      
+            ],
+            "🥕 Vegetables": "indoor_vegetables_dataset-_1_.xlsx"
+        }
+        self.selected_category = None
+        self.df = None
+
+    def run(self):
+        self.show_banner()
+        self.provide_options()
+        self.select_category()
+        self.load_data()
+        self.ask_questions()
+
+    def show_banner(self):
+        banner = f"""
+        {Fore.CYAN}======================================
+        🌟 KIBO 3.0 🌟
+        ======================================{Style.RESET_ALL}
+        """
+        print(banner)
+        time.sleep(1)
+
+    def provide_options(self):
+        print("\n✨ Here are some sample options you might find in each category:")
+        sample_data = {
+            "🍎 Fruits": ["Apple", "Banana", "Orange"],
+            "🌿 Plants": ["Aloe Vera", "Basil", "Fern"],
+            "🥕 Vegetables": ["Carrot", "Spinach", "Broccoli"]
+        }
+        for category, examples in sample_data.items():
+            print(f"{Fore.YELLOW}{category}: {', '.join(examples)}{Style.RESET_ALL}")
+        time.sleep(1)
+
+    def select_category(self):
+        while True:
+            print("\n📌 Select a category:")
+            for key, value in self.categories.items():
+                print(f"{Fore.YELLOW}{key}. {value}{Style.RESET_ALL}")
+
+            choice = input("➡ Enter your choice: ").strip()
+            if choice in self.categories:
+                self.selected_category = self.categories[choice]
+                print(f"\n✅ You selected: {Fore.GREEN}{self.selected_category}{Style.RESET_ALL}")
+                break
+            else:
+                print(f"{Fore.RED}❌ Invalid choice. Try again.{Style.RESET_ALL}")
+
+    def load_data(self):
+        file_info = self.xlsx_files[self.selected_category]
+
+        if isinstance(file_info, list):  # Handling multiple sheets for Plants
+            dataframes = []
+            for file in file_info:
+                if not os.path.exists(file):
+                    print(f"{Fore.RED}❌ Error: File '{file}' not found!{Style.RESET_ALL}")
+                    return
+                try:
+                    df = pd.read_excel(file, engine="openpyxl")
+                    dataframes.append(df)
+                except Exception as e:
+                    print(f"{Fore.RED}❌ Error reading '{file}': {e}{Style.RESET_ALL}")
+                    return
+            self.df = pd.concat(dataframes, ignore_index=True)  # Merge all sheets
+        else:
+            if not os.path.exists(file_info):
+                print(f"{Fore.RED}❌ Error: File '{file_info}' not found!{Style.RESET_ALL}")
+                return
+            try:
+                self.df = pd.read_excel(file_info, engine="openpyxl")
+            except Exception as e:
+                print(f"{Fore.RED}❌ Error reading file: {e}{Style.RESET_ALL}")
+                return
+
+        print(f"📂 {Fore.BLUE}Data from '{file_info}' loaded successfully!{Style.RESET_ALL}")
+        time.sleep(1)
+
+    def ask_questions(self):
+        if self.df is None:
+            print(f"{Fore.RED}❌ No data available. Please check your dataset.{Style.RESET_ALL}")
+            return
+
+        filters = {}
+        print("\n📝 Answer the following questions to refine your search:")
+
+        for column in self.df.columns:
+            unique_values = self.df[column].dropna().unique()
+
+            if len(unique_values) <= 10:
+                print(f"\n➡ {Fore.MAGENTA}{column}{Style.RESET_ALL}: Choose from the options below:")
+                options = {"0": "Skip preference / No filter"}  # Reordered skip option to appear first
+                options.update({str(idx + 1): value for idx, value in enumerate(unique_values)})
+
+                for key, value in options.items():
+                    print(f"{Fore.YELLOW}{key}. {value}{Style.RESET_ALL}")
+
+                while True:
+                    choice = input("➡ Enter your choice: ").strip()
+                    if choice in options:
+                        if choice == "0":
+                            print(f"{Fore.CYAN}✅ Skipping this filter.{Style.RESET_ALL}")
+                        else:
+                            filters[column] = options[choice]
+                        break
+                    else:
+                        print(f"{Fore.RED}❌ Invalid selection. Try again.{Style.RESET_ALL}")
+            else:
+                value = input(f"\n➡ {Fore.CYAN}{column}{Style.RESET_ALL}: Enter your preference (or press Enter to skip): ").strip()
+                if value:
+                    matches = process.extract(value, self.df[column].astype(str), limit=10)  # Limit to 10 results
+                    if matches and matches[0][1] > 60:
+                        print(f"{Fore.GREEN}🔍 Best Matches: {', '.join([m[0] for m in matches])}{Style.RESET_ALL}")
+                        filters[column] = matches[0][0]
+                    else:
+                        print(f"{Fore.YELLOW}⚠ No close matches found. Using your input as is.{Style.RESET_ALL}")
+                        filters[column] = value
+
+        self.filter_results(filters)
+
+    def filter_results(self, filters):
+        if not filters:
+            print(f"{Fore.RED}❌ No filters applied. Showing all data.{Style.RESET_ALL}")
+            print(tabulate(self.df, headers="keys", tablefmt="fancy_grid", showindex=False))
+            return
+
+        filtered_df = self.df.copy()
+        for column, value in filters.items():
+            filtered_df = filtered_df[filtered_df[column].astype(str).str.lower() == str(value).lower()]
+
+        if filtered_df.empty:
+            print(f"\n{Fore.RED}❌ No exact matches found. Showing closest available results:{Style.RESET_ALL}")
+            suggested_results = self.df.apply(
+                lambda row: any(process.extractOne(str(value), [str(row[col])])[1] > 60 for col in filters.keys()),
+                axis=1
+            )
+            similar_df = self.df[suggested_results].head(10)  # Limit suggestions to 10
+            if not similar_df.empty:
+                print(tabulate(similar_df, headers="keys", tablefmt="fancy_grid", showindex=False))
+            else:
+                print(f"{Fore.RED}❌ No close alternatives found.{Style.RESET_ALL}")
+        else:
+            print(f"\n{Fore.GREEN}✅ Here are your best matches:{Style.RESET_ALL}")
+            print(tabulate(filtered_df, headers="keys", tablefmt="fancy_grid", showindex=False))
+
+            if self.selected_category == "🌿 Plants" and "Sunlight" in filtered_df.columns:
+                for _, row in filtered_df.iterrows():
+                    print(f"{Fore.YELLOW}☀ Reminder: {row['Name']} requires {row['Sunlight']}. {Style.RESET_ALL}")
+
+if __name__ == "__main__":
+    classifier = DataClassifierV3()
+    classifier.run()
